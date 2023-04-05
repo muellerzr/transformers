@@ -23,7 +23,7 @@ from datetime import timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-
+from accelerate import Accelerator
 from packaging import version
 
 from .debug_utils import DebugOption
@@ -1113,9 +1113,9 @@ class TrainingArguments:
     def __post_init__(self):
         # Handle --use_env option in torch.distributed.launch (local_rank not passed as an arg then).
         # This needs to happen before any call to self.device or self.n_gpu.
-        env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
-        if env_local_rank != -1 and env_local_rank != self.local_rank:
-            self.local_rank = env_local_rank
+        # env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
+        # if env_local_rank != -1 and env_local_rank != self.local_rank:
+        #     self.local_rank = env_local_rank
 
         # expand paths, if not os.makedirs("~/bar") will make directory
         # in the current directory instead of the actual home
@@ -1279,6 +1279,14 @@ class TrainingArguments:
             self.torch_compile = True
         if self.torch_compile and self.torch_compile_backend is None:
             self.torch_compile_backend = "inductor"
+
+        # Accelerate Torch 2.0 Dynamo Plugin
+        dynamo_plugin = None
+        if self.torch_compile:
+            from accelerate.utils import TorchDynamoPlugin
+
+            dynamo_plugin = TorchDynamoPlugin(backend=self.torch_compile_backend, mode=self.torch_compile_mode)
+
         if self.framework == "pt" and is_torch_available() and self.torch_compile:
             if is_torch_tf32_available():
                 if self.tf32 is None and not self.fp16 or self.bf16:
@@ -1412,6 +1420,39 @@ class TrainingArguments:
             if self.fsdp_config["xla_fsdp_grad_ckpt"]:
                 warnings.warn("`--xla_fsdp_grad_ckpt` is useful only when `--xla` is set to true.")
 
+        # Accelerate PyTorch FSDP Plugin
+        fsdp_plugin = None
+        if len(self.fsdp) > 0 and not self.fsdp_config["xla"]:
+            from accelerate.utils.constants import (
+                FSDP_SHARDING_STRATEGY,
+                FSDP_AUTO_WRAP_POLICY,
+                FSDP_BACKWARD_PREFETCH,
+            )
+            from accelerate.utils import FullyShardedDataParallelPlugin
+
+            for fsdp_option in self.fsdp:
+                if fsdp_option.upper() in FSDP_SHARDING_STRATEGY:
+                    # set environment variable for FSDP sharding strategy
+                    os.environ["FSDP_SHARDING_STRATEGY"] = FSDP_SHARDING_STRATEGY.index(fsdp_option.upper()) + 1
+                elif fsdp_option == FSDPOption.OFFLOAD:
+                    os.environ["FSDP_OFFLOAD_PARAMS"] = "true"
+                elif fsdp_option == FSDPOption.AUTO_WRAP:
+                    if self.fsdp_config["fsdp_min_num_params"] > 0:
+                        os.environ["FSDP_MIN_NUM_PARAMS"] = str(self.fsdp_config["fsdp_min_num_params"])
+                        os.environ["FSDP_AUTO_WRAP_POLICY"] = FSDP_AUTO_WRAP_POLICY[1]
+                    elif self.fsdp_config.get("fsdp_transformer_layer_cls_to_wrap", None) is not None:
+                        os.environ["FSDP_TRANSFORMER_LAYER_CLS_TO_WRAP"] = ",".join(
+                            self.fsdp_config["fsdp_transformer_layer_cls_to_wrap"]
+                        )
+                        os.environ["FSDP_AUTO_WRAP_POLICY"] = FSDP_AUTO_WRAP_POLICY[0]
+            prefetch_policy = self.fsdp_config.get("fsdp_backward_prefetch", "NO_PREFETCH")
+            os.environ["FSDP_BACKWARD_PREFETCH"] = FSDP_BACKWARD_PREFETCH.index(prefetch_policy.upper()) + 1
+
+            fsdp_plugin = FullyShardedDataParallelPlugin(
+                limit_all_gathers=self.fsdp_config.get("limit_all_gathers", False),
+                use_orig_params=self.fsdp_config.get("use_orig_params", False),
+            )
+
         if self.tpu_metrics_debug:
             warnings.warn(
                 "using `--tpu_metrics_debug` is deprecated and will be removed in version 5 of 🤗 Transformers. Use"
@@ -1422,6 +1463,8 @@ class TrainingArguments:
             self.tpu_metrics_debug = False
         if isinstance(self.debug, str):
             self.debug = [DebugOption(s) for s in self.debug.split()]
+
+        deepspeed_plugin = None
 
         if self.deepspeed:
             # - must be run very last in arg parsing, since it will use a lot of these settings.
@@ -1434,6 +1477,20 @@ class TrainingArguments:
             # note: leave self.deepspeed unmodified in case a user relies on it not to be modified)
             self.hf_deepspeed_config = HfTrainerDeepSpeedConfig(self.deepspeed)
             self.hf_deepspeed_config.trainer_config_process(self)
+
+            # Accelerate DeepSpeed Plugin
+            from accelerate.utils import DeepSpeedPlugin
+
+            # ToDo
+
+        # Accelerate mixed precision setting
+        # ToDo
+
+        self.accelerator = Accelerator(
+            deepspeed_plugin=deepspeed_plugin,
+            dynamo_plugin=dynamo_plugin,
+            fsdp_plugin=fsdp_plugin,
+        )
 
         if self.push_to_hub_token is not None:
             warnings.warn(
