@@ -513,6 +513,8 @@ class Trainer:
                 "Passing a `model_init` is incompatible with providing the `optimizers` argument. "
                 "You should subclass `Trainer` and override the `create_optimizer_and_scheduler` method."
             )
+        #! accelerate.prepare
+        # Pretty sure Accelerate handles this on `prepare`
         if is_torch_tpu_available() and self.optimizer is not None:
             for param in self.model.parameters():
                 model_device = param.device
@@ -606,6 +608,8 @@ class Trainer:
                         "but SageMaker Model Parallelism < 1.10 does not support FP16 in trainer."
                     )
 
+        #! mixed precision
+        # Should all be handled internally with Accelerator
         if args.fp16 or args.bf16:
             if args.half_precision_backend == "auto":
                 if args.device == torch.device("cpu"):
@@ -621,6 +625,8 @@ class Trainer:
             logger.info(f"Using {args.half_precision_backend} half precision backend")
 
         self.do_grad_scaling = False
+        #! mixed precision
+        # Should all be handled internally with Accelerator
         if (args.fp16 or args.bf16) and not (args.deepspeed or is_sagemaker_mp_enabled()):
             # deepspeed and SageMaker Model Parallel manage their own half precision
             if args.half_precision_backend == "cuda_amp":
@@ -885,22 +891,25 @@ class Trainer:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         if isinstance(train_dataset, torch.utils.data.IterableDataset):
-            if self.args.world_size > 1:
-                train_dataset = IterableDatasetShard(
-                    train_dataset,
-                    batch_size=self._train_batch_size,
-                    drop_last=self.args.dataloader_drop_last,
-                    num_processes=self.args.world_size,
-                    process_index=self.args.process_index,
-                )
-
-            return DataLoader(
+            if self.args.accelerator is None:
+                if self.args.world_size > 1:
+                    train_dataset = IterableDatasetShard(
+                        train_dataset,
+                        batch_size=self._train_batch_size,
+                        drop_last=self.args.dataloader_drop_last,
+                        num_processes=self.args.world_size,
+                        process_index=self.args.process_index,
+                    )
+            dataloader = DataLoader(
                 train_dataset,
                 batch_size=self._train_batch_size,
                 collate_fn=data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
+            if self.args.accelerator:
+                return self.accelerator.prepare(dataloader)
+            return dataloader
 
         train_sampler = self._get_train_sampler()
 
@@ -966,21 +975,25 @@ class Trainer:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="evaluation")
 
         if isinstance(eval_dataset, torch.utils.data.IterableDataset):
-            if self.args.world_size > 1:
-                eval_dataset = IterableDatasetShard(
-                    eval_dataset,
-                    batch_size=self.args.per_device_eval_batch_size,
-                    drop_last=self.args.dataloader_drop_last,
-                    num_processes=self.args.world_size,
-                    process_index=self.args.process_index,
-                )
-            return DataLoader(
+            if self.args.accelerator is None:
+                if self.args.world_size > 1:
+                    eval_dataset = IterableDatasetShard(
+                        eval_dataset,
+                        batch_size=self.args.per_device_eval_batch_size,
+                        drop_last=self.args.dataloader_drop_last,
+                        num_processes=self.args.world_size,
+                        process_index=self.args.process_index,
+                    )
+            dataloader = DataLoader(
                 eval_dataset,
                 batch_size=self.args.eval_batch_size,
                 collate_fn=data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
+            if self.args.accelerator:
+                return self.accelerator.prepare(dataloader)
+            return dataloader
 
         eval_sampler = self._get_eval_sampler(eval_dataset)
 
@@ -1013,7 +1026,7 @@ class Trainer:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="test")
 
         if isinstance(test_dataset, torch.utils.data.IterableDataset):
-            if self.args.world_size > 1:
+            if self.args.accelerator is None and self.args.world_size > 1:
                 test_dataset = IterableDatasetShard(
                     test_dataset,
                     batch_size=self.args.eval_batch_size,
@@ -1021,13 +1034,17 @@ class Trainer:
                     num_processes=self.args.world_size,
                     process_index=self.args.process_index,
                 )
-            return DataLoader(
+            dataloader = DataLoader(
                 test_dataset,
                 batch_size=self.args.eval_batch_size,
                 collate_fn=data_collator,
                 num_workers=self.args.dataloader_num_workers,
                 pin_memory=self.args.dataloader_pin_memory,
             )
+
+            if self.args.accelerator:
+                return self.accelerator.prepare(dataloader)
+            return dataloader
 
         test_sampler = self._get_eval_sampler(test_dataset)
 
@@ -1421,6 +1438,8 @@ class Trainer:
             return model
 
         # Distributed training (should be after apex fp16 initialization)
+        #! accelerate.prepare
+        # Accelerate should be able to handle all of these
         if self.sharded_ddp is not None:
             # Sharded DDP!
             if self.sharded_ddp == ShardedDDPOption.SIMPLE:
@@ -1439,6 +1458,7 @@ class Trainer:
                     cpu_offload=cpu_offload,
                 ).to(self.args.device)
         # Distributed training using PyTorch FSDP
+        #! accelerate.prepare
         elif self.fsdp is not None:
             if not self.args.fsdp_config["xla"]:
                 # PyTorch FSDP!
@@ -1492,6 +1512,7 @@ class Trainer:
                         forward_prefetch=self.forword_prefetch,
                         limit_all_gathers=self.limit_all_gathers,
                     )
+            #! accelerate.prepare
             else:
                 try:
                     from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
@@ -1549,6 +1570,7 @@ class Trainer:
                 model, device_ids=[int(os.getenv("SMDATAPARALLEL_LOCAL_RANK"))]
             )
         elif self.args.local_rank != -1:
+            #! accelerate.prepare
             kwargs = {}
             if self.args.ddp_find_unused_parameters is not None:
                 kwargs["find_unused_parameters"] = self.args.ddp_find_unused_parameters
@@ -1725,6 +1747,7 @@ class Trainer:
             or self.fsdp is not None
         )
         if args.deepspeed:
+            #! accelerator.state
             deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
                 self, num_training_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint
             )
@@ -1864,6 +1887,8 @@ class Trainer:
             elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
                 train_dataloader.dataset.set_epoch(epoch)
 
+            #! accelerator.prepare
+            # Handled in `accelerator.prepare`
             if is_torch_tpu_available():
                 parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
                 epoch_iterator = parallel_loader
@@ -1940,7 +1965,7 @@ class Trainer:
                 # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
                 if self.deepspeed:
                     self.deepspeed.step()
-
+                #! accelerator.accumulate
                 if total_batched_samples % args.gradient_accumulation_steps == 0 or (
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
                     steps_in_epoch <= args.gradient_accumulation_steps
@@ -2698,6 +2723,8 @@ class Trainer:
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
+        #! accelerator.backward
+        # Accelerate handles gradient accumulation on the backward pass
         if self.args.gradient_accumulation_steps > 1 and not self.deepspeed:
             # deepspeed handles loss scaling by gradient_accumulation_steps in its `backward`
             loss = loss / self.args.gradient_accumulation_steps
@@ -3294,6 +3321,8 @@ class Trainer:
 
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
+    #! operations
+    # Use `accelerator.gather`
     def _nested_gather(self, tensors, name=None):
         """
         Gather value of `tensors` (tensor or list/tuple of nested tensors) and convert them to numpy before
@@ -3311,6 +3340,7 @@ class Trainer:
             tensors = distributed_concat(tensors)
         return tensors
 
+    #! operations
     # Copied from Accelerate.
     def _pad_across_processes(self, tensor, pad_index=-100):
         """
