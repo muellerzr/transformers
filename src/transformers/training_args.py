@@ -24,8 +24,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from packaging import version
 from accelerate import Accelerator
+from packaging import version
 
 from .debug_utils import DebugOption
 from .trainer_utils import (
@@ -130,6 +130,7 @@ class OptimizerNames(ExplicitEnum):
     ADAMW_ANYPRECISION = "adamw_anyprecision"
     SGD = "sgd"
     ADAGRAD = "adagrad"
+
 
 #! accelerator
 # The accelerator should be added here
@@ -1111,7 +1112,7 @@ class TrainingArguments:
         # Handle --use_env option in torch.distributed.launch (local_rank not passed as an arg then).
         # This needs to happen before any call to self.device or self.n_gpu.
         self.accelerator_state = self.accelerator.state if self.accelerator is not None else None
-        
+
         env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
         if env_local_rank != -1 and env_local_rank != self.local_rank:
             self.local_rank = env_local_rank
@@ -1685,7 +1686,6 @@ class TrainingArguments:
         _ = self._setup_devices
         return self._n_gpu
 
-
     @property
     def parallel_mode(self):
         """
@@ -1831,7 +1831,7 @@ class TrainingArguments:
         )
 
     #! tag: state
-    #* Should passthrough to the `AcceleratorState.main_process_first`
+    # * Should passthrough to the `AcceleratorState.main_process_first`
     @contextlib.contextmanager
     def main_process_first(self, local=True, desc="work"):
         """

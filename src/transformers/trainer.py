@@ -889,7 +889,7 @@ class Trainer:
 
         train_sampler = self._get_train_sampler()
 
-        dataloader = DataLoader(
+        return DataLoader(
             train_dataset,
             batch_size=self._train_batch_size,
             sampler=train_sampler,
@@ -899,9 +899,6 @@ class Trainer:
             pin_memory=self.args.dataloader_pin_memory,
             worker_init_fn=seed_worker,
         )
-        if self.args.accelerator:
-            return self.accelerator.prepare(dataloader)
-        return dataloader
 
     def _get_eval_sampler(self, eval_dataset: Dataset) -> Optional[torch.utils.data.Sampler]:
         # Deprecated code
@@ -976,7 +973,7 @@ class Trainer:
 
         eval_sampler = self._get_eval_sampler(eval_dataset)
 
-        dataloader = DataLoader(
+        return DataLoader(
             eval_dataset,
             sampler=eval_sampler,
             batch_size=self.args.eval_batch_size,
@@ -985,9 +982,6 @@ class Trainer:
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
-        if self.args.accelerator:
-            return self.accelerator.prepare(dataloader)
-        return dataloader
 
     def get_test_dataloader(self, test_dataset: Dataset) -> DataLoader:
         """
@@ -1031,7 +1025,7 @@ class Trainer:
         test_sampler = self._get_eval_sampler(test_dataset)
 
         # We use the same batch_size as for eval.
-        dataloader = DataLoader(
+        return DataLoader(
             test_dataset,
             sampler=test_sampler,
             batch_size=self.args.eval_batch_size,
@@ -1040,10 +1034,6 @@ class Trainer:
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
-
-        if self.args.accelerator:
-            return self.accelerator.prepare(dataloader)
-        return dataloader
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         """

@@ -322,6 +322,7 @@ def is_main_process(local_rank):
         return xm.get_ordinal() == 0
     return local_rank in [-1, 0]
 
+
 #! state
 # Replace with `PartialState`
 def total_processes_number(local_rank):
