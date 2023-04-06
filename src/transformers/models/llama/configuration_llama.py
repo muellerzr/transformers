@@ -30,7 +30,7 @@ LLAMA_PRETRAINED_CONFIG_ARCHIVE_MAP = {}
 
 class LlamaConfig(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`~LlamaModel`]. It is used to instantiate an LLaMA
+    This is the configuration class to store the configuration of a [`LlamaModel`]. It is used to instantiate an LLaMA
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
     defaults will yield a similar configuration to that of the LLaMA-7B.
 
@@ -41,7 +41,7 @@ class LlamaConfig(PretrainedConfig):
     Args:
         vocab_size (`int`, *optional*, defaults to 32000):
             Vocabulary size of the LLaMA model. Defines the number of different tokens that can be represented by the
-            `inputs_ids` passed when calling [`~LlamaModel`]
+            `inputs_ids` passed when calling [`LlamaModel`]
         hidden_size (`int`, *optional*, defaults to 4096):
             Dimension of the hidden representations.
         intermediate_size (`int`, *optional*, defaults to 11008):
@@ -52,6 +52,9 @@ class LlamaConfig(PretrainedConfig):
             Number of attention heads for each attention layer in the Transformer encoder.
         hidden_act (`str` or `function`, *optional*, defaults to `"silu"`):
             The non-linear activation function (function or string) in the decoder.
+        max_position_embeddings (`int`, *optional*, defaults to 2048):
+            The maximum sequence length that this model might ever be used with. Typically set this to something large
+            just in case (e.g., 512 or 1024 or 2048).
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         rms_norm_eps (`float`, *optional*, defaults to 1e-12):
@@ -85,6 +88,7 @@ class LlamaConfig(PretrainedConfig):
         num_hidden_layers=32,
         num_attention_heads=32,
         hidden_act="silu",
+        max_position_embeddings=2048,
         initializer_range=0.02,
         rms_norm_eps=1e-6,
         use_cache=True,
@@ -95,6 +99,7 @@ class LlamaConfig(PretrainedConfig):
         **kwargs,
     ):
         self.vocab_size = vocab_size
+        self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_hidden_layers = num_hidden_layers

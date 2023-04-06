@@ -20,14 +20,16 @@ import unittest
 from transformers import LlamaConfig, is_torch_available
 from transformers.testing_utils import require_torch, torch_device
 
+from ...generation.test_utils import GenerationTesterMixin
 from ...test_configuration_common import ConfigTester
 from ...test_modeling_common import ModelTesterMixin, ids_tensor, random_attention_mask
+from ...test_pipeline_mixin import PipelineTesterMixin
 
 
 if is_torch_available():
     import torch
 
-    from transformers import LlamaForCausalLM, LlamaModel
+    from transformers import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel
 
 
 class LlamaModelTester:
@@ -254,17 +256,21 @@ class LlamaModelTester:
 
 
 @require_torch
-class LlamaModelTest(ModelTesterMixin, unittest.TestCase):
-    all_model_classes = (
-        (
-            LlamaModel,
-            LlamaForCausalLM,
-        )
-        if is_torch_available()
-        else ()
-    )
+class LlamaModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, unittest.TestCase):
+    all_model_classes = (LlamaModel, LlamaForCausalLM, LlamaForSequenceClassification) if is_torch_available() else ()
     all_generative_model_classes = (LlamaForCausalLM,) if is_torch_available() else ()
+    pipeline_model_mapping = (
+        {
+            "feature-extraction": LlamaModel,
+            "text-classification": LlamaForSequenceClassification,
+            "text-generation": LlamaForCausalLM,
+            "zero-shot": LlamaForSequenceClassification,
+        }
+        if is_torch_available()
+        else {}
+    )
     test_headmasking = False
+    test_pruning = False
 
     def setUp(self):
         self.model_tester = LlamaModelTester(self)
@@ -283,21 +289,45 @@ class LlamaModelTest(ModelTesterMixin, unittest.TestCase):
             config_and_inputs[0].position_embedding_type = type
             self.model_tester.create_and_check_model(*config_and_inputs)
 
-    @unittest.skip("LLaMA does not support head pruning.")
-    def test_head_pruning(self):
-        pass
+    def test_llama_sequence_classification_model(self):
+        config, input_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config.num_labels = 3
+        input_ids = input_dict["input_ids"]
+        attention_mask = input_ids.ne(1).to(torch_device)
+        sequence_labels = ids_tensor([self.model_tester.batch_size], self.model_tester.type_sequence_label_size)
+        model = LlamaForSequenceClassification(config)
+        model.to(torch_device)
+        model.eval()
+        result = model(input_ids, attention_mask=attention_mask, labels=sequence_labels)
+        self.assertEqual(result.logits.shape, (self.model_tester.batch_size, self.model_tester.num_labels))
 
-    @unittest.skip("LLaMA does not support head pruning.")
-    def test_head_pruning_integration(self):
-        pass
+    def test_llama_sequence_classification_model_for_single_label(self):
+        config, input_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config.num_labels = 3
+        config.problem_type = "single_label_classification"
+        input_ids = input_dict["input_ids"]
+        attention_mask = input_ids.ne(1).to(torch_device)
+        sequence_labels = ids_tensor([self.model_tester.batch_size], self.model_tester.type_sequence_label_size)
+        model = LlamaForSequenceClassification(config)
+        model.to(torch_device)
+        model.eval()
+        result = model(input_ids, attention_mask=attention_mask, labels=sequence_labels)
+        self.assertEqual(result.logits.shape, (self.model_tester.batch_size, self.model_tester.num_labels))
 
-    @unittest.skip("LLaMA does not support head pruning.")
-    def test_head_pruning_save_load_from_config_init(self):
-        pass
-
-    @unittest.skip("LLaMA does not support head pruning.")
-    def test_head_pruning_save_load_from_pretrained(self):
-        pass
+    def test_llama_sequence_classification_model_for_multi_label(self):
+        config, input_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config.num_labels = 3
+        config.problem_type = "multi_label_classification"
+        input_ids = input_dict["input_ids"]
+        attention_mask = input_ids.ne(1).to(torch_device)
+        sequence_labels = ids_tensor(
+            [self.model_tester.batch_size, config.num_labels], self.model_tester.type_sequence_label_size
+        ).to(torch.float)
+        model = LlamaForSequenceClassification(config)
+        model.to(torch_device)
+        model.eval()
+        result = model(input_ids, attention_mask=attention_mask, labels=sequence_labels)
+        self.assertEqual(result.logits.shape, (self.model_tester.batch_size, self.model_tester.num_labels))
 
     @unittest.skip("LLaMA buffers include complex numbers, which breaks this test")
     def test_save_load_fast_init_from_base(self):
